@@ -1,0 +1,44 @@
+
+
+function _serialize(value)
+    if type(value) == "string" then
+        return string.format("%q", value)
+    end
+    if type(value) == "table" then
+        local mt = getmetatable(value) or {}
+        local s = "setmetatable({"
+        local i = 0
+        for k, v in pairs(value) do
+            if i > 0 then
+                s = s .. ", "
+            end
+            s = s .. "["
+                .. _serialize(k)
+                .. "] ="
+                .. _serialize(v)
+            i = i + 1
+        end
+        return s .. "}, {})"
+    end
+    if type(value) == "function" then
+        local bs = string.dump(value)
+        local s = "string.char("
+        for i = 1, #bs do
+            if i > 1 then
+                s = s .. ", "
+            end
+            values = values .. string.byte(bs, i)
+        end
+        return s .. ")"
+    end
+    return tostring(value)
+end
+local file = io.open("./.complua/.eval.temp", "w")
+__expr = { print((string.format)("1 equals %d, as opposed to %d.", 1, 2)) }
+file:write(string.dump(function()
+    return table.unpack(__expr)
+end))
+file:close()
+local file = io.open("./.complua/.eval.temp.expr", "w")
+file:write(_serialize(__expr))
+file:close()
