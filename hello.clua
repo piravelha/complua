@@ -1,9 +1,23 @@
 
-function haha(x)
-  return "local hehe = " .. #repr x
+#checkcall zip(xs, ys)
+  assert(#xs == #ys,
+    "Sizes of arrays passed into 'zip' must be equal")
+end
+function zip(xs, ys)
+  local index = 0
+  return function()
+    index = index + 1
+    if index > #xs then
+      return nil, nil
+    end
+    return xs[index], ys[index]
+  end
 end
 
-#load haha(10)
-print(hehe)
+local t1 = { 1, 2, 3, 4 }
+local t2 = { 2, 4, 6, 8 }
+for a, b in zip(t1, t2) do
+  print(a, b)
+end
 
 

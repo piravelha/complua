@@ -1,9 +1,7 @@
-function square (x)
 
-return ((x .. " * ") .. x)
-end
-
-function _serialize(value)
+_G["#COMPLUA"] = _G["#COMPLUA"] or {}
+_G["#COMPLUA"].serialize = function(value)
+    local _serialize = _G["#COMPLUA"].serialize
     if type(value) == "string" then
         return '"' .. value .. '"'
     end
@@ -25,23 +23,37 @@ function _serialize(value)
     end
     if type(value) == "function" then
         local bs = string.dump(value)
-        local s = "string.char("
+        local s = "load(string.char("
         for i = 1, #bs do
             if i > 1 then
                 s = s .. ", "
             end
-            values = values .. string.byte(bs, i)
+            s = s .. string.byte(bs, i)
         end
-        return s .. ")"
+        return s .. "))"
     end
     return tostring(value)
 end
-local file = io.open("./.complua/.eval.temp", "w")
-__expr = { square(true) }
-file:write(string.dump(function()
-    return table.unpack(__expr)
-end))
-file:close()
-local file = io.open("./.complua/.eval.temp.expr", "w")
-file:write(_serialize(__expr))
-file:close()
+
+
+function zip (xs, ys)
+local index = 0;
+local __defer = {function ()
+index = (index + 1);
+if (index > (# xs)) then
+
+local __defer = {nil, nil}
+return unpack(__defer);
+
+end
+local __defer = {xs[index], ys[index]}
+return unpack(__defer);
+end}
+return unpack(__defer);
+end
+local t1 = {1, 2, 3, 4};
+local t2 = {2, 4, 6, 8};
+for a, b in zip(t1, t2)  do
+print(a, b);
+
+end
