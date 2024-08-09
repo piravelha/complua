@@ -35,25 +35,40 @@ _G["#COMPLUA"].serialize = function(value)
     return tostring(value)
 end
 
+function print_player (player
+--LINE:2
 
-function zip (xs, ys)
-local index = 0;
-local __defer = {function ()
-index = (index + 1);
-if (index > (# xs)) then
+--LINE:2
+)
+--LINE:2
 
-local __defer = {nil, nil}
-return unpack(__defer);
+(player.error ~= nil and player.error or error)("oh no!")
+--LINE:3
 
-end
-local __defer = {xs[index], ys[index]}
-return unpack(__defer);
-end}
-return unpack(__defer);
-end
-local t1 = {1, 2, 3, 4};
-local t2 = {2, 4, 6, 8};
-for a, b in zip(t1, t2)  do
-print(a, b);
+--LINE:3
+;
+--LINE:3
+
+
+--LINE:3
 
 end
+--LINE:2
+
+--LINE:2
+
+print_player({name = "Ian"
+--LINE:7
+, age = 15
+--LINE:8
+}
+--LINE:7
+)
+--LINE:7
+
+--LINE:6
+;
+--LINE:6
+
+
+--LINE:2

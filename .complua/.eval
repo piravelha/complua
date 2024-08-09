@@ -1,0 +1,70 @@
+
+_G["#COMPLUA"] = _G["#COMPLUA"] or {}
+_G["#COMPLUA"].serialize = function(value)
+    local _serialize = _G["#COMPLUA"].serialize
+    if type(value) == "string" then
+        return '"' .. value .. '"'
+    end
+    if type(value) == "table" then
+        local mt = getmetatable(value) or {}
+        local s = "setmetatable({"
+        local i = 0
+        for k, v in pairs(value) do
+            if i > 0 then
+                s = s .. ", "
+            end
+            s = s .. "["
+                .. _serialize(k)
+                .. "] ="
+                .. _serialize(v)
+            i = i + 1
+        end
+        return s .. "}, {})"
+    end
+    if type(value) == "function" then
+        local bs = string.dump(value)
+        local s = "load(string.char("
+        for i = 1, #bs do
+            if i > 1 then
+                s = s .. ", "
+            end
+            s = s .. string.byte(bs, i)
+        end
+        return s .. "))"
+    end
+    return tostring(value)
+end
+function print_player (player
+--LINE:2
+
+--LINE:2
+)
+--LINE:2
+
+(player.error ~= nil and player.error or error)("oh no!")
+--LINE:3
+
+--LINE:3
+;
+--LINE:3
+
+
+--LINE:3
+
+end
+--LINE:2
+
+
+local file = io.open("./.complua/.eval.temp", "w")
+__expr = { error(1)
+--LINE:1
+
+--LINE:1
+ }
+file:write(string.dump(function()
+    return unpack(__expr)
+end))
+file:close()
+local file = io.open("./.complua/.eval.temp.expr", "w")
+file:write(_G["#COMPLUA"].serialize(__expr))
+file:close()
