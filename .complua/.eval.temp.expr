@@ -1,1 +1,1 @@
-setmetatable({}, {})
+setmetatable({[1] ="10 * 10"}, {})

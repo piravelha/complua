@@ -1,7 +1,4 @@
-function square (x)
 
-return ((x .. " * ") .. x)
-end
 
 function _serialize(value)
     if type(value) == "string" then
@@ -36,12 +33,8 @@ function _serialize(value)
     end
     return tostring(value)
 end
-local file = io.open("./.complua/.eval.temp", "w")
-__expr = { square(true) }
-file:write(string.dump(function()
-    return table.unpack(__expr)
-end))
-file:close()
-local file = io.open("./.complua/.eval.temp.expr", "w")
-file:write(_serialize(__expr))
+
+
+local file = io.open("./.complua/torepr.temp", "w")
+file:write(_serialize(x))
 file:close()

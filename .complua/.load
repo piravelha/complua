@@ -1,7 +1,8 @@
-function square (x)
+function haha (x)
 
-return ((x .. " * ") .. x)
+return ("local hehe = " .. _serialize(x))
 end
+
 
 function _serialize(value)
     if type(value) == "string" then
@@ -36,12 +37,13 @@ function _serialize(value)
     end
     return tostring(value)
 end
-local file = io.open("./.complua/.eval.temp", "w")
-__expr = { square(true) }
+
+local file = io.open("./.complua/.load.temp", "w")
+__expr = { haha(10) }
 file:write(string.dump(function()
     return table.unpack(__expr)
 end))
 file:close()
-local file = io.open("./.complua/.eval.temp.expr", "w")
+local file = io.open("./.complua/.load.temp.expr", "w")
 file:write(_serialize(__expr))
 file:close()
