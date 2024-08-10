@@ -164,11 +164,11 @@ def get_dependencies(node, **kw):
         if node.type == "NAME":
             for k, v in kw["env"]:
                 if k == node.value:
-                    return get_dependencies(v, **kw) + [compile(v, **kw)]
+                    return get_dependencies(v, **kw) + [v]
         return []
     return [x
             for c in node.children
-            for x in get_dependencies(c, **kw)]
+            for x in get_dependencies(c or Token("EMPTY", ""), **kw)]
 
 parser = Lark(grammar, start="chunk")
 
@@ -313,6 +313,10 @@ def compile_func_decl(name, body, **kw):
     kw["env"].append((name, body))
     return code
 
+def compile_single_assign(name, expr, **kw):
+    expr = compile(expr, **kw)
+    return f"{name} = {expr};"
+
 def compile_assign_stmt(names, exprs, **kw):
     for n in names.children:
         if n.value in kw["inline_params"]:
@@ -321,7 +325,9 @@ def compile_assign_stmt(names, exprs, **kw):
             del kw["checkcall"][n.value]
     s = ""
     for name, expr in zip(names.children, exprs.children):
-        kw["env"].append((name.value, expr))
+        kw["env"].append((name.value, Tree("single_assign", [Token("RAW_NAME", name.value), expr])))
+        depens = get_dependencies(expr, **kw)
+        kw["assigns"].append((name.value, Tree("stmts", depens + [Tree("single_assign", [Token("RAW_NAME", name.value), expr])])))
         expr = compile(expr, **kw)
         if kw["using"]:
             for u in kw["using"][::-1]:
@@ -427,11 +433,27 @@ def compile_return_stmt(exprs, **kw):
     if not exprs:
         return "return"
     exprs = compile(exprs, **kw)
-    return f"return {exprs}"
+    return f"return {exprs};"
+
+def compile_stmts(*stmts, **kw):
+    return "\n".join(compile(stmt, **kw) for stmt in stmts)
 
 def compile_chunk(*stmts, **kw):
     *stmts, last = stmts
-    stmts = [compile(s, **kw) for s in stmts]
+    new_stmts = []
+    for stmt in stmts:
+        for i, (k, v) in enumerate(kw["assigns"].copy()):
+            if k not in dict(kw["env"]):
+                kw["assigns"].pop(i)
+            else:
+                v2 = None
+                for i2, (k2, v2) in enumerate(kw["env"]):
+                    if k2 == k:
+                        kw["env"].pop(i2)
+                        break
+                kw["env"].append((k, Tree("stmts", [v2, v])))
+        stmt = compile(stmt, **kw.copy())
+        new_stmts.append(stmt)
     if last:
         if last.data == "return_stmt":
             expr = last.children[0]
@@ -446,7 +468,7 @@ def compile_chunk(*stmts, **kw):
         last = ""
         for d in kw["defer"]:
             last += compile(d, **kw)+"\n"
-    return "\n".join(stmts) + "\n" + last
+    return "\n".join(new_stmts) + "\n" + last
 
 serialize = f"""
 _G["#COMPLUA"] = _G["#COMPLUA"] or {{}}
@@ -500,7 +522,7 @@ file:close()
 """
 
 def compile_eval(expr, **kw):
-    decls = "\n\n".join(get_dependencies(expr, **kw))
+    decls = "\n\n".join(compile(d, **kw) for d in get_dependencies(expr, **kw))
     expr = compile(expr, **kw)
     path = "./.complua/.eval"
     with open(path, "w") as f:
@@ -546,7 +568,7 @@ def compile_checkcall(name, body, **kw):
 
 def compile_load(expr, **kw):
     old_expr = expr
-    decls = "\n\n".join(get_dependencies(expr, **kw))
+    decls = "\n\n".join(compile(d, **kw) for d in get_dependencies(expr, **kw))
     expr = compile(expr, **kw)
     path = "./.complua/.load"
     with open(path, "w") as f:
@@ -607,7 +629,7 @@ def compile(tree, **kw):
 
 def run(code, path, debug):
     tree = parser.parse(code)
-    out = compile(tree, env=[], debug=debug, checkcall={}, inline={}, inline_params={}, defer=[], using=[], line_info=True)
+    out = compile(tree, env=[], debug=debug, checkcall={}, inline={}, inline_params={}, defer=[], using=[], line_info=True, assigns=[])
     with open(path, "w") as f:
         f.write(serialize + "\n" + out)
     # subprocess.run(["rm", path+".temp"], capture_output=True)

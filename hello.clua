@@ -1,5 +1,32 @@
 
-local x = 5
-local y = print("oh no")
-local z = x + 5
-#eval print(y)
+#checkcall ascii_map(...)
+  local lines = { ... }
+  local length = -1
+  for i, line in pairs(lines) do
+    if length == -1 then
+      length = #line
+    end
+    if #line ~= length then
+      error("All lines of the map "
+      .. "must be of the same length!")
+    end
+  end
+end
+function ascii_map(...)
+  -- ...
+end
+
+-- compiles just fine
+ascii_map(
+  "xxxxxxxx",
+  "x      x",
+  "xxxxxxxx")
+
+-- throws a compile-time error
+ascii_map(
+  "xxxxxxxx",
+  "x      x",
+  "xxxxxxxxx")
+         --^
+
+
