@@ -1,5 +1,5 @@
 
-function print_player(#using player)
-  error("oh no!")
-end
-
+local x = 5
+local y = print("oh no")
+local z = x + 5
+#eval print(y)

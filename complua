@@ -1,0 +1,643 @@
+#!/usr/bin/python
+import re
+import subprocess
+
+from lark import Lark, Token, Tree
+
+grammar = r"""
+?any: chunk | decl | expr
+
+chunk: (decl | defer)* [last_stmt]
+
+?decl: if_stmt
+     | range_for_stmt
+     | iter_for_stmt
+     | assign_stmt
+     | inplace_stmt
+     | func_decl
+     | method_call -> method_stmt
+     | func_call -> call_stmt
+     | var_decl
+     | do_block
+     | eval
+     | assert
+     | debug
+     | checkcall
+     | load
+     | todo
+     | inline
+     | using
+
+do_block: "do" chunk "end"
+
+?last_stmt: return_stmt
+          | break_stmt
+
+return_stmt: "return" [exprs]
+break_stmt: "break"
+
+range_for_stmt: "for" NAME "=" expr "," expr "," expr "do" chunk "end"
+iter_for_stmt: "for" names "in" expr "do" chunk "end"
+
+if_stmt: "if" expr "then" chunk elseifs else_branch "end"
+elseifs: ("elseif" expr "then" chunk)*
+else_branch: ["else" chunk]
+
+assign_stmt: names "=" exprs
+inplace_stmt: names INPLACE exprs
+var_decl: "local" names "=" exprs
+
+func_decl: "function" NAME func_body
+func_name: NAME ("." NAME)* [":" NAME]
+
+func_expr: "function" func_body
+
+func_body: params chunk "end"
+params: "(" param_names ["," ELLIPSIS] ")"
+      | "(" [ELLIPSIS] ")" -> varargs
+param_names: param ("," param)*
+param: NAME
+     | "#using" NAME -> using_param
+
+names: NAME ("," NAME)*
+exprs: expr ("," expr)*
+
+method_call: prefix_expr ":" NAME args
+
+prop_expr: prefix_expr "." NAME
+index_expr.2: prefix_expr "[" expr "]"
+
+table: "{" (field ("," field)* ","?)? "}"
+?field: NAME "=" expr -> obj_field
+      | "[" expr "]" "=" expr -> map_field
+      | expr
+
+func_call: prefix_expr args
+args: "(" (expr ("," expr)*)? ")"
+
+?expr: or_expr
+     | func_expr
+     | eval
+     | load
+     | do_block -> do_expr
+
+?or_expr: or_expr OR_OP and_expr
+        | and_expr
+?and_expr: and_expr AND_OP eq_expr
+         | eq_expr
+?eq_expr: eq_expr EQ_OP rel_expr
+        | rel_expr
+?rel_expr: rel_expr REL_OP add_expr
+         | add_expr
+?add_expr: add_expr ADD_OP mul_expr
+         | mul_expr
+?mul_expr: mul_expr MUL_OP pow_expr
+         | pow_expr
+?pow_expr: pow_expr POW_OP unary_expr
+         | unary_expr
+?unary_expr: UNARY_OP unary_expr
+           | atom
+
+eval.2: "#eval" expr
+assert.2: "#assert" expr
+debug.2: "#debug" expr [exprs]
+checkcall.2: "#checkcall" NAME func_body
+load.2: "#load" expr
+torepr.2: "#repr" expr
+todo.2: "#todo" [STRING]
+inline.2: "#inline" func_decl
+defer.2: "#defer" decl
+using.2: "#using" prefix_expr
+
+?atom: NUMBER
+     | STRING
+     | BOOLEAN
+     | NIL
+     | ELLIPSIS
+     | table
+     | prefix_expr
+     | torepr
+     | todo
+
+?prefix_expr: NAME
+            | func_call
+            | prop_expr
+            | index_expr
+            | method_call
+            | "(" expr ")" -> paren
+
+INPLACE: "^=" | "*=" | "/=" | "%=" | "+=" | "-=" | "..="
+ELLIPSIS: "..."
+OR_OP: "or"
+AND_OP: "and"
+EQ_OP: "==" | "~="
+REL_OP: "<" | ">" | "<=" | ">="
+ADD_OP: "+" | "-" | ".."
+MUL_OP: "*" | "/" | "%"
+POW_OP: "^"
+UNARY_OP: "not" | "-" | "#"
+
+NAME.1: /[a-zA-Z_]\w*/
+NIL: "nil"
+BOOLEAN: "true" | "false"
+STRING: /"([^"\\]|\\.)*"/
+      | /'([^'\\]|\\.)*'/ 
+NUMBER: /\d+/
+COMMENT: /--.*/
+
+%ignore /\s+/
+%ignore COMMENT
+%ignore /--\[\[(.|\n)*?\]\]/
+"""
+
+def get_loc(node: Token | Tree):
+    if isinstance(node, Token):
+        return node.line, node.column
+    if node.meta.empty:
+        if node.children and node.children[0]:
+            return get_loc(node.children[0])
+        return 0, 0
+    return node.meta.line, node.meta.column
+
+def get_dependencies(node, **kw):
+    if isinstance(node, Token):
+        if node.type == "NAME":
+            for k, v in kw["env"]:
+                if k == node.value:
+                    return get_dependencies(v, **kw) + [compile(v, **kw)]
+        return []
+    return [x
+            for c in node.children
+            for x in get_dependencies(c, **kw)]
+
+parser = Lark(grammar, start="chunk")
+
+def compile_NAME(token, **kw):
+    if token.value in kw["inline_params"]:
+        return kw["inline_params"][token.value]
+    if kw["using"]:
+        s = "("
+        for u in kw["using"][::-1]:
+            s += u + "." + token.value
+            s += f" ~= nil and {u}.{token} or "
+        s += token.value + ")"
+        return s
+    return token.value
+
+def compile_paren(expr, **kw):
+    return f"({compile(expr, **kw)})"
+
+def compile_unary_expr(op, expr, **kw):
+    op = compile(op, **kw)
+    expr = compile(expr, **kw)
+    return f"({op} {expr})"
+
+def compile_binary_expr(left, op, right, **kw):
+    left = compile(left, **kw)
+    op = compile(op, **kw)
+    right = compile(right, **kw)
+    return f"({left} {op} {right})"
+
+compile_pow_expr = compile_binary_expr
+compile_mul_expr = compile_binary_expr
+compile_add_expr = compile_binary_expr
+compile_rel_expr = compile_binary_expr
+compile_eq_expr = compile_binary_expr
+compile_and_expr = compile_binary_expr
+compile_or_expr = compile_binary_expr
+
+def compile_args(*exprs, **kw):
+    exprs = ", ".join([
+        compile(e, **kw) for e in exprs])
+    return f"({exprs})"
+
+def replace(tree, p, a):
+    if isinstance(tree, Token):
+        if tree == p:
+            return a
+        return tree
+    if tree.data == "var_decl":
+        return Tree(tree.data, [tree.children[0], replace(tree.children[1], p, a)])
+    return Tree(tree.data, [replace(c, p, a) for c in tree.children])
+
+def compile_func_call(prefix, args, **kw):
+    if isinstance(prefix, Token):
+        if str(prefix) in kw["checkcall"]:
+            body = kw["checkcall"][str(prefix)]
+            compile_eval(Tree("func_call", [Tree("paren", [Tree("func_expr", [body])]), args]), **kw)
+        if str(prefix) in kw["inline"]:
+            func = kw["inline"][str(prefix)]
+            _, func_body = func.children
+            params, body = func_body.children
+            params = params.children[0]
+            kw["inline_params"] = kw["inline_params"].copy()
+            for p, a in zip(params.children, args.children):
+                kw["inline_params"][p.children[0].value] = a
+            body = compile(body, **kw)
+            return f"(function()\n{body}\nend)()"
+    old_line_info = kw["line_info"]
+    kw["line_info"] = False
+    prefix = compile(prefix, **kw)
+    args = compile(args, **kw)
+    kw["line_info"] = old_line_info
+    return f"{prefix}{args}"
+
+def compile_call_stmt(call, **kw):
+    return compile(call, **kw) + ";"
+
+def compile_method_stmt(call, **kw):
+    return compile(call, **kw) + ";"
+
+def compile_obj_field(name, value, **kw):
+    value = compile(value, **kw)
+    return f"{name} = {value}"
+
+def compile_map_field(key, value, **kw):
+    key = compile(key, **kw)
+    value = compile(key, **kw)
+    return f"[{key}] = {value}"
+
+def compile_table(*fields, **kw):
+    fields = ", ".join(compile(f, **kw) for f in fields)
+    return f"{{{fields}}}"
+
+def compile_prop_expr(prefix, prop, **kw):
+    prefix = compile(prefix, **kw)
+    return f"{prefix}.{prop}"
+
+def compile_index_expr(prefix, index, **kw):
+    prefix = compile(prefix, **kw)
+    index = compile(index, **kw)
+    return f"{prefix}[{index}]"
+
+def compile_method_call(prefix, prop, args, **kw):
+    prefix = compile(prefix, **kw)
+    prop = compile(prop, **kw)
+    args = compile(args, **kw)
+    return f"{prefix}:{prop}{args}"
+
+def compile_params(names, ellipsis, **kw):
+    ellipsis = ", ..." \
+        if ellipsis is not None else ""
+    names = compile(names, **kw)
+    return f"({names}{ellipsis})"
+    
+def compile_varargs(ellipsis, **_):
+    ellipsis = "..." \
+        if ellipsis is not None else ""
+    return f"({ellipsis})"
+
+def compile_func_body(params, chunk, **kw):
+    kw["env"] = kw["env"].copy()
+    kw["defer"] = kw["defer"].copy()
+    kw["using"] = kw["using"].copy()
+    params = compile(params, **kw)
+    chunk = compile(chunk, **kw)
+    return f"{params}\n{chunk}\nend"
+
+def compile_func_expr(body, **kw):
+    body = compile(body, **kw)
+    return f"function {body}"
+
+def compile_func_name(*args, **kw):
+    name, *props, call = args
+    call = call and f":{compile(call, **kw)}" or ""
+    props = "".join([f".{compile(p, **kw)}" for p in props])
+    name = compile(name, **kw)
+    return f"{name}{props}{call}"
+
+def compile_func_decl(name, body, **kw):
+    name = compile(name, **kw)
+    new_body = compile(body, **kw)
+    code = f"function {name} {new_body}"
+    kw["env"].append((name, body))
+    return code
+
+def compile_assign_stmt(names, exprs, **kw):
+    for n in names.children:
+        if n.value in kw["inline_params"]:
+            del kw["inline_params"][n.value]
+        if n.value in kw["checkcall"]:
+            del kw["checkcall"][n.value]
+    s = ""
+    for name, expr in zip(names.children, exprs.children):
+        kw["env"].append((name.value, expr))
+        expr = compile(expr, **kw)
+        if kw["using"]:
+            for u in kw["using"][::-1]:
+                s += f"if {u}.{name} ~= nil then\n{u}.{name} = {expr};\nelse"
+            s += f"\n{name} = {expr}\nend\n"
+    return s
+
+def compile_inplace_stmt(names, op, exprs, **kw):
+    op = Token("OP", op[:-1])
+    new_exprs = []
+    for name, expr in zip(names.children, exprs.children):
+        new_exprs.append(Tree("pow_expr", [name, op, expr]))
+    return compile_assign_stmt(names, Tree("exprs", new_exprs), **kw)
+
+def compile_var_decl(names, exprs, **kw):
+    ns = compile(names, **kw)
+    es = compile(exprs, **kw) 
+    for n in names.children:
+        if n.value in kw["inline_params"]:
+            del kw["inline_params"][n.value]
+        if n.value in kw["checkcall"]:
+            del kw["checkcall"][n.value]
+    for n, e in zip(names.children, exprs.children):
+        kw["env"].append((n.value, Tree("single_var_decl", [Token("RAW_NAME", n.value), e])))
+    return f"local {ns} = {es};"
+
+def compile_single_var_decl(name, expr, **kw):
+    expr = compile(expr, **kw)
+    return f"local {name} = {expr};"
+
+def compile_names(*names, **_):
+    return ", ".join(n.value for n in names)
+
+def compile_param_names(*params, **kw):
+    return ", ".join(compile(p, **kw) for p in params)
+
+def compile_param(name, **_):
+    return name.value
+
+def compile_using_param(name, **kw):
+    kw["using"].append(name.value)
+    return name.value
+
+def compile_exprs(*exprs, **kw):
+    return ", ".join(
+        compile(e, **kw) for e in exprs)
+
+def compile_if_stmt(cond, body, elifs, els, **kw):
+    cond = compile(cond, **kw)
+    body = compile(body, **kw)
+    elifs = compile(elifs, **kw)
+    els = compile(els, **kw)
+    return f"if {cond} then\n{body}{elifs}{els}\nend"
+
+def compile_range_for_stmt(var, start, stop, step, body, **kw):
+    var = var.value
+    start = compile(start, **kw)
+    stop = compile(stop, **kw)
+    step = compile(step, **kw)
+    body = compile(body, **kw)
+    return f"for {var} = {start}, {stop}, {step} do\n{body}\nend"
+
+def compile_iter_for_stmt(vars, tbl, body, **kw):
+    vars = compile(vars, **kw)
+    tbl = compile(tbl, **kw)
+    body = compile(body, **kw)
+    return f"for {vars} in {tbl}  do\n{body}\nend"
+
+
+def compile_elseifs(*pairs, **kw):
+    s = ""
+    for cond, body in zip(
+        pairs[::2], pairs[1::2]):
+        cond = compile(cond, **kw)
+        body = compile(body, **kw)
+        s += f"\nelseif {cond} then\n{body}"
+    return s + "\n"
+
+def compile_else_branch(els, **kw):
+    if not els:
+        return ""
+    els = compile(els, **kw)
+    return f"else {els}"
+
+def compile_do_block(chunk, **kw):
+    kw["env"] = kw["env"].copy()
+    kw["defer"] = kw["defer"].copy()
+    kw["using"] = kw["using"].copy()
+    chunk = compile(chunk, **kw)
+    return f"do\n{chunk}\nend"
+
+def compile_do_expr(chunk, **kw):
+    kw["env"] = kw["env"].copy()
+    kw["defer"] = kw["defer"].copy()
+    kw["using"] = kw["using"].copy()
+    chunk = compile(chunk, **kw)
+    return f"(function()\n{chunk}\nend)()"
+
+def compile_break_stmt(**_):
+    return "break"
+
+def compile_return_stmt(exprs, **kw):
+    if not exprs:
+        return "return"
+    exprs = compile(exprs, **kw)
+    return f"return {exprs}"
+
+def compile_chunk(*stmts, **kw):
+    *stmts, last = stmts
+    stmts = [compile(s, **kw) for s in stmts]
+    if last:
+        if last.data == "return_stmt":
+            expr = last.children[0]
+            s = f"local __defer = {{{compile(expr, **kw)}}}\n"
+            for d in kw["defer"]:
+                s += compile(d, **kw) + "\n"
+            s += "return unpack(__defer);"
+            last = s
+        else:
+            last = compile(last, **kw)
+    else:
+        last = ""
+        for d in kw["defer"]:
+            last += compile(d, **kw)+"\n"
+    return "\n".join(stmts) + "\n" + last
+
+serialize = f"""
+_G["#COMPLUA"] = _G["#COMPLUA"] or {{}}
+_G["#COMPLUA"].serialize = function(value)
+    local _serialize = _G["#COMPLUA"].serialize
+    if type(value) == "string" then
+        return '"' .. value .. '"'
+    end
+    if type(value) == "table" then
+        local mt = getmetatable(value) or {{}}
+        local s = "setmetatable({{"
+        local i = 0
+        for k, v in pairs(value) do
+            if i > 0 then
+                s = s .. ", "
+            end
+            s = s .. "["
+                .. _serialize(k)
+                .. "] ="
+                .. _serialize(v)
+            i = i + 1
+        end
+        return s .. "}}, {{}})"
+    end
+    if type(value) == "function" then
+        local bs = string.dump(value)
+        local s = "load(string.char("
+        for i = 1, #bs do
+            if i > 1 then
+                s = s .. ", "
+            end
+            s = s .. string.byte(bs, i)
+        end
+        return s .. "))"
+    end
+    return tostring(value)
+end
+"""
+
+def file_write_lua(path, expr):
+    return f"""
+local file = io.open("{path}", "w")
+__expr = {{ {expr} }}
+file:write(string.dump(function()
+    return unpack(__expr)
+end))
+file:close()
+local file = io.open("{path}.expr", "w")
+file:write(_G["#COMPLUA"].serialize(__expr))
+file:close()
+"""
+
+def compile_eval(expr, **kw):
+    decls = "\n\n".join(get_dependencies(expr, **kw))
+    expr = compile(expr, **kw)
+    path = "./.complua/.eval"
+    with open(path, "w") as f:
+        code = serialize + decls + f"\n{file_write_lua(path+'.temp', expr)}"
+        f.write(code)
+    res = subprocess.run(["luajit", path], stderr=subprocess.PIPE)
+    if res.stderr:
+        msg = res.stderr.decode()
+        line = re.match(r"luajit: .*:(\d+): ((?:.|\n)*)\nstack traceback:\n", msg, re.MULTILINE)
+        if not line:
+            print(msg)
+            exit(1)
+        rest = line.group(2)
+        line = line.group(1)
+        lines = code.splitlines()
+        for i in range(int(line), len(lines)):
+            if m := re.match(r"--LINE:(\d+)", lines[i]):
+                m = m.group(1)
+                print(f"complua: {in_path}:{m}: {rest}")
+                exit(1)
+    with open(path+".temp", "rb") as f:
+        bs = f.read()
+    with open(path+".temp.expr", "r") as f:
+        __expr = f.read()
+    return f"""(function()
+        __expr = {__expr}
+        return load(string.char({', '.join(str(b) for b in bs)}))()
+    end)()
+    """
+
+def compile_assert(expr, **kw):
+    return compile_eval(Tree("func_call", [Token("NAME", "assert"), Tree("args", [expr])]), **kw)
+
+def compile_debug(msg, formats, **kw):
+    if not kw["debug"]:
+        return ""
+    formats = formats and formats.children or []
+    return compile_eval(Tree("func_call", [Token("NAME", "print"), Tree("args", [Tree("func_call", [Tree("args", [Tree("prop_expr", [Token("NAME", "string"), Token("NAME", "format")])]), Tree("args", [msg, *formats])])])]), **kw)
+
+def compile_checkcall(name, body, **kw):
+    kw["checkcall"][str(name)] = body
+    return ""
+
+def compile_load(expr, **kw):
+    old_expr = expr
+    decls = "\n\n".join(get_dependencies(expr, **kw))
+    expr = compile(expr, **kw)
+    path = "./.complua/.load"
+    with open(path, "w") as f:
+        f.write(serialize + decls + f"\n{file_write_lua(path+'.temp', expr)}")
+    res = subprocess.run(["luajit", path], stderr=subprocess.PIPE)
+    if res.stderr:
+        msg = res.stderr.decode()
+        line = re.match(r"luajit: .*:(\d+): ((?:.|\n)*)\nstack traceback:\n", msg, re.MULTILINE)
+        assert line
+        rest = line.group(2)
+        line = line.group(1)
+        lines = code.splitlines()
+        for i in range(int(line), len(lines)):
+            if m := re.match(r"--LINE:(\d+)", lines[i]):
+                m = m.group(1)
+                print(f"complua: {in_path}:{m}: {rest}")
+                exit(1)
+    with open(path+".temp.expr", "r") as f:
+        __expr = f.read()
+    s = re.match(r"setmetatable\({\[1\] =(?:\"|')(.*)(?:\"|')}, \{\}\)", __expr)
+    if not s:
+        l, c = get_loc(old_expr)
+        raise ValueError(f"{l}:{c}: Argument to #load directive must be a string")
+    tree = Lark(grammar, start="any").parse(s.group(1))
+    return compile(tree, **kw)
+
+def compile_torepr(expr, **kw):
+    expr = compile(expr, **kw)
+    return f"_G[\"#COMPLUA\"].serialize({expr})"
+
+def compile_todo(s, **_):
+    if not s:
+        s = "\"Not implemented\""
+    else:
+        s = s.value
+    return f"error({s})"
+
+def compile_inline(func, **kw):
+    name = func.children[0]
+    kw["inline"][name.value] = func
+    return ""
+
+def compile_defer(decl, **kw):
+    kw["defer"].append(decl)
+    return ""
+
+def compile_using(prefix, **kw):
+    kw["using"].append(compile(prefix, **kw))
+    return ""
+
+def compile(tree, **kw):
+    if isinstance(tree, Token):
+        if "compile_"+tree.type in globals():
+            return globals()["compile_"+tree.type](tree, **kw)
+        return tree.value
+    info = kw["line_info"] and f"\n--LINE:{get_loc(tree)[0]}\n" or ""
+    return globals()["compile_"+tree.data](*tree.children, **kw) + info
+
+def run(code, path, debug):
+    tree = parser.parse(code)
+    out = compile(tree, env=[], debug=debug, checkcall={}, inline={}, inline_params={}, defer=[], using=[], line_info=True)
+    with open(path, "w") as f:
+        f.write(serialize + "\n" + out)
+    # subprocess.run(["rm", path+".temp"], capture_output=True)
+
+import sys
+
+subprocess.run(["mkdir", ".complua"], capture_output=True)
+
+args = sys.argv[1:]
+in_path = None
+out_path = "out.luac"
+debug = False
+
+while True:
+    if not args:
+        assert in_path
+        with open(in_path) as f:
+            code = f.read()
+            run(code, out_path, debug)
+        break
+
+    if args[0] == "--debug":
+        _, *args = args
+        debug = True
+    if args[0] == "-o":
+        _, out_path, *args = args
+    else:
+        in_path, *args = args
+
+subprocess.run(["rm", "-rf", ".complua"], capture_output=True)
+
+
+

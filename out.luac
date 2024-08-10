@@ -35,39 +35,37 @@ _G["#COMPLUA"].serialize = function(value)
     return tostring(value)
 end
 
-function print_player (player
+local x
+--LINE:2
+ = 5
+--LINE:2
+;
 --LINE:2
 
---LINE:2
-)
---LINE:2
-
-(player.error ~= nil and player.error or error)("oh no!")
+local y
+--LINE:3
+ = print("oh no")
 --LINE:3
 
 --LINE:3
 ;
 --LINE:3
 
+local z
+--LINE:4
+ = (x + 5)
+--LINE:4
 
---LINE:3
-
-end
---LINE:2
-
---LINE:2
-
-error(1)
---LINE:1
-
---LINE:1
+--LINE:4
 ;
---LINE:1
+--LINE:4
 
-
---LINE:1
-
---LINE:6
+(function()
+        __expr = setmetatable({}, {})
+        return load(string.char(27, 76, 74, 2, 8, 17, 64, 46, 47, 46, 99, 111, 109, 112, 108, 117, 97, 47, 46, 101, 118, 97, 108, 40, 0, 0, 3, 0, 2, 0, 3, 4, 47, 2, 54, 0, 0, 0, 54, 2, 1, 0, 68, 0, 2, 0, 11, 95, 95, 101, 120, 112, 114, 11, 117, 110, 112, 97, 99, 107, 1, 1, 1, 0, 0))()
+    end)()
+    
+--LINE:5
 
 
 --LINE:2
